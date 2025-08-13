@@ -1,0 +1,20 @@
+aliyun:
+  access_key_id: ""
+  access_key_secret: ""
+  region: "cn-hangzhou"
+
+mysql:
+  host: ""
+  port: 3306
+  username: "root"
+  password: ""
+  database: "jeecg-boot"
+
+domains:
+  - project_id: "1955529112922935297"
+    domain_id: "1955529700108718082"
+    domain: "xx.com"
+  - project_id: "1955529112922935297"
+    domain_id: "1955529700129689602"
+    domain: "yy.com"
+
