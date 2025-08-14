@@ -92,8 +92,8 @@ func (c *MySQLClient) InsertSubDomains(records []*models.AssetSubDomain) error {
 	query := `INSERT IGNORE INTO asset_sub_domain 
 		(id, sub_domain, type, create_time, update_by, create_by, update_time, 
 		 sys_org_code, dns_record, name_server, asset_label, asset_manager, 
-		 asset_department, level, domain_id, source, project_id) 
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 asset_department, level, domain_id, source, project_id, aliyun_record_id) 
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	stmt, err := tx.Prepare(query)
 	if err != nil {
@@ -130,6 +130,7 @@ func (c *MySQLClient) InsertSubDomains(records []*models.AssetSubDomain) error {
 			record.DomainID,
 			record.Source,
 			record.ProjectID,
+			record.AliyunRecordID,
 		)
 
 		if err != nil {
@@ -165,6 +166,151 @@ func (c *MySQLClient) CheckTableExists() error {
 	}
 
 	return nil
+}
+
+// GetLocalRecords 获取数据库中指定域名的所有记录
+func (c *MySQLClient) GetLocalRecords(domainID string) (map[string]*models.AssetSubDomain, error) {
+	query := `SELECT id, sub_domain, type, dns_record, aliyun_record_id, create_time, update_time
+			  FROM asset_sub_domain 
+			  WHERE domain_id = ? AND source = 'Aliyun-DNS-Sync' AND aliyun_record_id IS NOT NULL`
+	
+	rows, err := c.db.Query(query, domainID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query local records: %w", err)
+	}
+	defer rows.Close()
+
+	localRecords := make(map[string]*models.AssetSubDomain)
+	
+	for rows.Next() {
+		record := &models.AssetSubDomain{}
+		var aliyunRecordID sql.NullString
+		var dnsRecord sql.NullString
+		
+		err := rows.Scan(
+			&record.ID,
+			&record.SubDomain,
+			&record.Type,
+			&dnsRecord,
+			&aliyunRecordID,
+			&record.CreateTime,
+			&record.UpdateTime,
+		)
+		if err != nil {
+			log.Printf("Failed to scan record: %v", err)
+			continue
+		}
+		
+		if aliyunRecordID.Valid {
+			record.AliyunRecordID = &aliyunRecordID.String
+			if dnsRecord.Valid {
+				record.DNSRecord = &dnsRecord.String
+			}
+			localRecords[aliyunRecordID.String] = record
+		}
+	}
+	
+	return localRecords, nil
+}
+
+// InsertRecord 插入单条记录
+func (c *MySQLClient) InsertRecord(record *models.AssetSubDomain) error {
+	// 生成ID
+	id, err := c.GetNextID()
+	if err != nil {
+		return fmt.Errorf("failed to generate ID: %w", err)
+	}
+	record.ID = id
+
+	query := `INSERT INTO asset_sub_domain 
+		(id, sub_domain, type, create_time, update_by, create_by, update_time, 
+		 sys_org_code, dns_record, name_server, asset_label, asset_manager, 
+		 asset_department, level, domain_id, source, project_id, aliyun_record_id) 
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	_, err = c.db.Exec(
+		query,
+		record.ID,
+		record.SubDomain,
+		record.Type,
+		record.CreateTime,
+		record.UpdateBy,
+		record.CreateBy,
+		record.UpdateTime,
+		record.SysOrgCode,
+		record.DNSRecord,
+		record.NameServer,
+		record.AssetLabel,
+		record.AssetManager,
+		record.AssetDepartment,
+		record.Level,
+		record.DomainID,
+		record.Source,
+		record.ProjectID,
+		record.AliyunRecordID,
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to insert record: %w", err)
+	}
+
+	return nil
+}
+
+// UpdateRecord 更新记录
+func (c *MySQLClient) UpdateRecord(localID string, aliyunRecord *models.DNSRecord) error {
+	// 组合子域名
+	subDomain := aliyunRecord.DomainName
+	if aliyunRecord.RR != "" && aliyunRecord.RR != "@" {
+		subDomain = aliyunRecord.RR + "." + aliyunRecord.DomainName
+	}
+
+	query := `UPDATE asset_sub_domain 
+			  SET sub_domain = ?, type = ?, dns_record = ?, update_time = NOW() 
+			  WHERE id = ?`
+
+	_, err := c.db.Exec(query, subDomain, aliyunRecord.Type, aliyunRecord.Value, localID)
+	if err != nil {
+		return fmt.Errorf("failed to update record: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteRecord 删除记录
+func (c *MySQLClient) DeleteRecord(localID string) error {
+	query := `DELETE FROM asset_sub_domain WHERE id = ?`
+	
+	_, err := c.db.Exec(query, localID)
+	if err != nil {
+		return fmt.Errorf("failed to delete record: %w", err)
+	}
+
+	return nil
+}
+
+// NeedUpdate 检查记录是否需要更新
+func NeedUpdate(aliyunRecord *models.DNSRecord, localRecord *models.AssetSubDomain) bool {
+	// 组合阿里云记录的完整域名
+	aliyunSubDomain := aliyunRecord.DomainName
+	if aliyunRecord.RR != "" && aliyunRecord.RR != "@" {
+		aliyunSubDomain = aliyunRecord.RR + "." + aliyunRecord.DomainName
+	}
+
+	// 比较关键字段
+	if localRecord.SubDomain != aliyunSubDomain {
+		return true
+	}
+	
+	if localRecord.Type != aliyunRecord.Type {
+		return true
+	}
+	
+	if localRecord.DNSRecord == nil || *localRecord.DNSRecord != aliyunRecord.Value {
+		return true
+	}
+
+	return false
 }
 
 // GetRecordCount 获取记录总数（用于统计）

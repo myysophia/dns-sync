@@ -40,6 +40,7 @@ type AssetSubDomain struct {
 	DomainID         string     `db:"domain_id"`
 	Source           string     `db:"source"`
 	ProjectID        string     `db:"project_id"`
+	AliyunRecordID   *string    `db:"aliyun_record_id"`
 }
 
 // ConvertToAssetSubDomain 将阿里云DNS记录转换为数据库记录
@@ -52,6 +53,9 @@ func (d *DNSRecord) ConvertToAssetSubDomain(domainID, projectID string) *AssetSu
 		subDomain = d.RR + "." + d.DomainName
 	}
 
+	// 将Value作为DNS记录值
+	dnsRecord := d.Value
+
 	return &AssetSubDomain{
 		SubDomain:       subDomain,
 		Type:            d.Type,
@@ -61,6 +65,8 @@ func (d *DNSRecord) ConvertToAssetSubDomain(domainID, projectID string) *AssetSu
 		DomainID:        domainID,
 		Source:          "Aliyun-DNS-Sync",
 		ProjectID:       projectID,
+		AliyunRecordID:  &d.RecordId,
+		DNSRecord:       &dnsRecord,
 	}
 }
 
